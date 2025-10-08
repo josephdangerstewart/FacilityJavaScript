@@ -32,6 +32,14 @@ export interface IHttpClientOptions {
 	baseUri?: string;
 }
 
+/** Options for an HTTP client with event methods. */
+export interface IStreamableHttpClientOptions {
+	/** The fetch object. */
+	fetch: HttpClientUtility.IStreamableFetch;
+	/** The base URI of the service. */
+	baseUri?: string;
+}
+
 /** Helpers for HTTP clients. */
 // eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace HttpClientUtility {

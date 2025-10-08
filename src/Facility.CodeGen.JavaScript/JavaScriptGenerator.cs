@@ -76,6 +76,7 @@ namespace Facility.CodeGen.JavaScript
 				return GenerateFastifyPluginOutput(service);
 
 			var httpServiceInfo = HttpServiceInfo.Create(service);
+			var hasEvents = httpServiceInfo.Events.Count != 0;
 
 			var moduleName = ModuleName ?? service.Name;
 			var capModuleName = CodeGenUtility.Capitalize(moduleName);
@@ -172,12 +173,21 @@ namespace Facility.CodeGen.JavaScript
 					using (code.Block("export function createHttpClient(options" + IfTypeScript(": IHttpClientOptions") + ")" + IfTypeScript($": I{capModuleName}") + " {", "}"))
 						code.WriteLine($"return new {capModuleName}HttpClient(options);");
 
+					List<string> imports = ["fetchResponse", "createResponseError", "createRequiredRequestFieldError"];
+					List<string> typeImports = ["IFetch", "IFetchRequest"];
+
+					if (hasEvents)
+					{
+						imports.Add("fetchEventResponse");
+						typeImports.Add("IStreamableFetch");
+					}
+
 					code.WriteLine();
-					code.WriteLine("const { fetchResponse, createResponseError, createRequiredRequestFieldError } = HttpClientUtility;");
+					code.WriteLine($"const {{ {string.Join(", ", imports)} }} = HttpClientUtility;");
 					if (TypeScript)
 					{
-						code.WriteLine("type IFetch = HttpClientUtility.IFetch;");
-						code.WriteLine("type IFetchRequest = HttpClientUtility.IFetchRequest;");
+						foreach (var typeImport in typeImports)
+							code.WriteLine($"type {typeImport} = HttpClientUtility.{typeImport};");
 					}
 
 					// TODO: export this from facility-core?
@@ -199,10 +209,13 @@ namespace Facility.CodeGen.JavaScript
 					}
 
 					code.WriteLine();
+					var httpOptionsType = hasEvents ? "IStreamableHttpClientOptions" : "IHttpClientOptions";
+					var fetchType = hasEvents ? "IStreamableFetch" : "IFetch";
+
 					WriteJsDoc(code, $"Provides access to {capModuleName} over HTTP via fetch.");
 					using (code.Block($"export class {capModuleName}HttpClient" + IfTypeScript($" implements I{capModuleName}") + " {", "}"))
 					{
-						using (code.Block("constructor({ fetch, baseUri }" + IfTypeScript(": IHttpClientOptions") + ") {", "}"))
+						using (code.Block("constructor({ fetch, baseUri }" + IfTypeScript($": {httpOptionsType}") + ") {", "}"))
 						{
 							using (code.Block("if (typeof fetch !== 'function') {", "}"))
 								code.WriteLine("throw new TypeError('fetch must be a function.');");
@@ -381,7 +394,7 @@ namespace Facility.CodeGen.JavaScript
 						if (TypeScript)
 						{
 							code.WriteLine();
-							code.WriteLine("private _fetch: IFetch;");
+							code.WriteLine($"private _fetch: {fetchType};");
 							code.WriteLine("private _baseUri: string;");
 						}
 					}
