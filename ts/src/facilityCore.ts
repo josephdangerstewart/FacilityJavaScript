@@ -1,3 +1,5 @@
+import { IServerSentEvent, streamResponse } from "./streamResponse";
+
 /** A service result. */
 export interface IServiceResultBase {
 	/** The error. */
@@ -38,6 +40,11 @@ export namespace HttpClientUtility {
 		(uri: string, request: IFetchRequest, context?: unknown): Promise<IFetchResponse>;
 	}
 
+	/** A fetch function that supports streaming. */
+	export interface IStreamableFetch {
+		(uri: string, request: IFetchRequest, context?: unknown): Promise<IStreamableFetchResponse>;
+	}
+
 	/** The minimal fetch request. */
 	export interface IFetchRequest {
 		method?: string;
@@ -52,6 +59,17 @@ export namespace HttpClientUtility {
 			get(name: string): string | null;
 		};
 		json(): Promise<unknown>;
+	}
+
+	/** A streamable fetch response. */
+	export interface IStreamableFetchResponse extends IFetchResponse {
+		body: ReadableStream<Uint8Array<ArrayBuffer>> | null;
+	}
+
+	/** A fetch response with streamed content. */
+	export interface IStreamableFetchResponseWithContent {
+		response: IStreamableFetchResponse;
+		stream: AsyncGenerator<IServerSentEvent>;
 	}
 
 	/** A fetch response with any fetched content. */
@@ -76,6 +94,11 @@ export namespace HttpClientUtility {
 	};
 
 	const jsonContentType = 'application/json';
+	const eventContentType = 'text/event-stream';
+
+	function isContentType(contentTypeHeader: string | null, contentType: string) {
+		return typeof contentTypeHeader === 'string' && contentTypeHeader.toLowerCase().substring(0, contentType.length) === contentType;
+	}
 
 	/** Fetch JSON using the specified fetch, URI, and request. */
 	export function fetchResponse(
@@ -92,7 +115,7 @@ export namespace HttpClientUtility {
 			if (!contentType) {
 				return Promise.resolve({ response: response, json: {} });
 			}
-			if (contentType.toLowerCase().substr(0, jsonContentType.length) === jsonContentType) {
+			if (isContentType(contentType, jsonContentType)) {
 				const jsonPromise = response.json();
 				if (!jsonPromise || typeof jsonPromise.then !== 'function') {
 					throw new TypeError('json() of fetch response must return a Promise.');
@@ -104,6 +127,28 @@ export namespace HttpClientUtility {
 			}
 			return Promise.resolve({ response: response });
 		});
+	}
+
+	export async function fetchEventResponse(
+		fetch: IStreamableFetch,
+		uri: string,
+		request: IFetchRequest,
+		context?: unknown
+	): Promise<IStreamableFetchResponseWithContent> {
+		async function* emptyStream(): AsyncGenerator<IServerSentEvent> {}
+
+		const response = await fetch(uri, request, context);
+		if (!response.headers || !response.status || !response.body) {
+			throw new TypeError('fetch must resove Promise with { status, headers, body }.');
+		}
+		const contentType = response.headers.get('content-type');
+		if (!contentType) {
+			return { response, stream: emptyStream() };
+		}
+		if (isContentType(contentType, eventContentType)) {
+			return { response, stream: streamResponse(response.body) };
+		}
+		return { response, stream: emptyStream() };
 	}
 
 	/** Creates an error result for the specified response. */
