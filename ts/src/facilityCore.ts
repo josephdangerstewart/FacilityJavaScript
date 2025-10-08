@@ -159,11 +159,7 @@ export namespace HttpClientUtility {
 		return { response, stream: emptyStream() };
 	}
 
-	/** Creates an error result for the specified response. */
-	export function createResponseError(status: number, json?: unknown): IServiceResultBase {
-		if (isServiceError(json)) {
-			return { error: json };
-		}
+	function getDefaultError(status: number) {
 		const isClientError = status >= 400 && status <= 499;
 		const isServerError = status >= 500 && status <= 599;
 		const errorCode = standardErrorCodes[status] || (isClientError ? 'InvalidRequest' : 'InvalidResponse');
@@ -173,6 +169,78 @@ export namespace HttpClientUtility {
 			? 'HTTP client error'
 			: 'Unexpected HTTP status code';
 		return { error: { code: errorCode, message: `${message}: ${status}` } };
+	}
+
+	/** Creates an error result for the specified response. */
+	export function createResponseError(status: number, json?: unknown): IServiceResultBase {
+		if (isServiceError(json)) {
+			return { error: json };
+		}
+		return getDefaultError(status);
+	}
+
+	/** Maps an event response to a common service result shape. */
+	export async function mapEventResponse<TResponse>(response: IStreamableFetchResponseWithContent, expectedStatusCodes: number[], mapData: (parsedData: TResponse) => IServiceResult<TResponse>): Promise<IServiceResult<AsyncGenerator<IServiceResult<TResponse>>>> {
+		const status = response.response.status;
+		if (!expectedStatusCodes.includes(status)) {
+			return await createResponseEventError(response.response);
+		}
+
+		return {
+			value: enumerateEventStream(response, mapData)
+		}
+	}
+
+	async function createResponseEventError(response: IStreamableFetchResponse): Promise<IServiceResultBase> {
+		const contentType = response.headers.get('content-type');
+		const status = response.status;
+
+		if (!contentType || !isContentType(contentType, jsonContentType)) {
+			return getDefaultError(status);
+		}
+
+		return createResponseError(status, await response.json());
+	}
+
+	async function *enumerateEventStream<TResponse>({ response, stream }: IStreamableFetchResponseWithContent, mapData: (parsedData: TResponse) => IServiceResult<TResponse>) {
+		const status = response.status;
+
+		for await (const { event, data } of stream) {
+			try {
+			const parsedData = JSON.parse(data);
+			if (event === 'error') {
+				if (isServiceError(parsedData)) {
+					return { error: parsedData };
+				}
+
+				return getDefaultError(status);
+			}
+
+			return mapData(parsedData);
+		} catch (error: any) {
+			if (typeof error === 'string') {
+				return {
+					error: {
+						code: 'InternalError',
+						message: error,
+					},
+				};
+			} else if (error instanceof Error) {
+				return {
+					error: {
+						code: 'InternalError',
+						message: error.message,
+					},
+				};
+			} else if (isServiceError(error)) {
+				return {
+					error,
+				};
+			} else {
+				return getDefaultError(status);
+			}
+		}
+		}
 	}
 
 	/** Creates an error result for a required request field. */
